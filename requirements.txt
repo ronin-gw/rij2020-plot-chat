@@ -1,0 +1,3 @@
+sudachipy
+jaconv
+matplotlib

@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.ticker import MultipleLocator
 import matplotlib.font_manager
 
 TIMELINE = os.path.join(os.path.dirname(__file__), "timeline.pickle")
@@ -96,7 +97,7 @@ GAMES = (
     ("DARK SOULS REMASTERED", 1609005175, 29, 50, 48),
     ("Salt and Sanctuary", 1609115920, 0, 4, 58),
     ("マリーのアトリエplus", 1609115920, 0, 51, 6),
-    ("FINAL\nFANTASY\nXV\nROYAL\nEDITION", 1609115920, 2, 3, 51),
+    ("FINAL FANTASY\nXV\nROYAL EDITION", 1609115920, 2, 3, 51, "right"),
     ("Kingdom Hearts II Final Mix", 1609115920, 3, 3, 28),
     ("イース セルセタの樹海", 1609115920, 6, 23, 37),
     ("MOTHER2", 1609115920, 7, 32, 45),
@@ -126,7 +127,7 @@ GAMES = (
     ("テイルコンチェルト", 1609115920, 38, 23, 1),
     ("No Straight Roads", 1609115920, 40, 0, 48),
     ("神巫女 -カミコ-", 1609115920, 40, 39, 36),
-    ("Warriors of Fate", 1609115920, 41, 16, 49),
+    ("Warriors\nof Fate", 1609115920, 41, 16, 49),
     ("マジックソード", 1609115920, 42, 26, 18),
     ("所さんの\nまもるも\nせめるも", 1609269995, 0, 11, 4),
     ("ジェットセットラジオ", 1609269995, 0, 41, 9),
@@ -167,10 +168,11 @@ GAMES = tuple(Game(*args) for args in GAMES)
 WINDOWSIZE = 1
 WINDOW = timedelta(seconds=WINDOWSIZE)
 AVR_WINDOW = 60
+PER_SECONDS = 60
 DPI = 200
 ROW = 4
 PAGES = 4
-YMAX = 450
+YMAX = 500
 WIDTH = 3840
 HEIGHT = 2160
 
@@ -330,11 +332,15 @@ def _plot(timeline):
 
 def _plot_row(ax, x, y, add_legend):
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d %H:%M", tz=TIMEZONE))
+    ax.xaxis.set_major_locator(mdates.HourLocator())
+    ax.xaxis.set_minor_locator(mdates.MinuteLocator(range(0, 60, 5)))
+    ax.yaxis.set_minor_locator(MultipleLocator(50))
     ax.set_facecolor(FACE_COLOR)
     for axis in ("top", "bottom", "left", "right"):
         ax.spines[axis].set_color(FRAME_COLOR)
 
-    ax.tick_params(colors=FONT_COLOR)
+    ax.tick_params(colors=FONT_COLOR, which="both")
+    ax.set_xlim(x[0], x[-1])
     ax.set_ylim(0, YMAX)
 
     for game in GAMES:
@@ -347,7 +353,7 @@ def _plot_row(ax, x, y, add_legend):
         _y = np.fromiter((c[e] for c in y), int)
         if not sum(_y):
             continue
-        _y = moving_average(_y) * AVR_WINDOW
+        _y = moving_average(_y) * PER_SECONDS
         ax.plot(x, _y, label=e, linestyle=style, color=(color if color else None))
 
     if add_legend:

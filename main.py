@@ -7,9 +7,12 @@ from collections import Counter
 from itertools import chain
 from datetime import datetime, timezone, timedelta
 from operator import itemgetter
+from multiprocessing import Pool
 
 from sudachipy import tokenizer, dictionary
 import jaconv
+
+import numpy as np
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -93,7 +96,7 @@ GAMES = (
     ("DARK SOULS REMASTERED", 1609005175, 29, 50, 48),
     ("Salt and Sanctuary", 1609115920, 0, 4, 58),
     ("マリーのアトリエplus", 1609115920, 0, 51, 6),
-    ("FINAL FANTASY XV ROYAL EDITION", 1609115920, 2, 3, 51),
+    ("FINAL\nFANTASY\nXV\nROYAL\nEDITION", 1609115920, 2, 3, 51),
     ("Kingdom Hearts II Final Mix", 1609115920, 3, 3, 28),
     ("イース セルセタの樹海", 1609115920, 6, 23, 37),
     ("MOTHER2", 1609115920, 7, 32, 45),
@@ -123,7 +126,7 @@ GAMES = (
     ("テイルコンチェルト", 1609115920, 38, 23, 1),
     ("No Straight Roads", 1609115920, 40, 0, 48),
     ("神巫女 -カミコ-", 1609115920, 40, 39, 36),
-    ("Warriors\nof\nFate", 1609115920, 41, 16, 49),
+    ("Warriors of Fate", 1609115920, 41, 16, 49),
     ("マジックソード", 1609115920, 42, 26, 18),
     ("所さんの\nまもるも\nせめるも", 1609269995, 0, 11, 4),
     ("ジェットセットラジオ", 1609269995, 0, 41, 9),
@@ -142,7 +145,7 @@ GAMES = (
     ("DARK SOULS\nREMASTERED", 1609341724, 1, 41, 1),
     ("朧村正", 1609341724, 2, 18, 2),
     ("鬼武者", 1609341724, 3, 54, 50),
-    ("New\nスーパーマリオ\nブラザーズ", 1609341724, 5, 7, 8),
+    ("New\nスーパーマリオ\nブラザーズ", 1609341724, 5, 7, 8, "right"),
     ("Momodora\n月下のレクイエム", 1609341724, 5, 46, 20),
     ("がんばれゴエモン3 獅子重禄兵衛のからくり卍固め", 1609341724, 6, 22, 50),
     ("Jump King", 1609341724, 7, 58, 53),
@@ -150,10 +153,20 @@ GAMES = (
     ("スーパーマリオランドトリロジーリレー", 1609341724, 9, 24, 50),
     ("ゼルダの伝説\nブレスオブザワイルド", 1609341724, 10, 56, 55)
 )
-GAMES = tuple((name, datetime.fromtimestamp(t + h * 3600 + m * 60 + s)) for name, t, h, m, s in GAMES)
+
+
+class Game:
+    def __init__(self, name, t, h, m, s, align="left"):
+        self.name = name
+        self.startat = datetime.fromtimestamp(t + h * 3600 + m * 60 + s)
+        self.align = align
+
+
+GAMES = tuple(Game(*args) for args in GAMES)
 
 WINDOWSIZE = 1
-WINDOW = timedelta(minutes=WINDOWSIZE)
+WINDOW = timedelta(seconds=WINDOWSIZE)
+AVR_WINDOW = 60
 DPI = 200
 ROW = 4
 PAGES = 4
@@ -232,23 +245,33 @@ class Message:
         return len(self.msg)
 
 
+def moving_average(x, w=AVR_WINDOW):
+    return np.convolve(x, np.ones(w), "same") / w
+
+
 def _parse_chat(paths):
     messages = []
     for p in paths:
-        with open(p) as f:
-            for d in json.load(f):
-                messages.append(Message(**d))
+        with open(p) as f, Pool() as pool:
+            j = json.load(f)
+            messages += list(pool.starmap(Message, (tuple(d.values()) for d in j), len(j) // pool._processes))
 
     timeline = []
-    currentwindow = messages[0].datetime.replace(second=0) + WINDOW
+    currentwindow = messages[0].datetime.replace(microsecond=0) + WINDOW
     _messages = []
     for m in messages:
         if m.datetime <= currentwindow:
             _messages.append(m)
         else:
             timeline.append((currentwindow, Counter(_ for _ in chain(*(m.msg for m in _messages)))))
-            currentwindow = m.datetime.replace(second=0) + WINDOW
-            _messages = [m]
+            while True:
+                currentwindow += WINDOW
+                if m.datetime <= currentwindow:
+                    _messages = [m]
+                    break
+                else:
+                    timeline.append((currentwindow, Counter()))
+
     if _messages:
         timeline.append((currentwindow, Counter(_ for _ in chain(*(m.msg for m in _messages)))))
 
@@ -314,20 +337,21 @@ def _plot_row(ax, x, y, add_legend):
     ax.tick_params(colors=FONT_COLOR)
     ax.set_ylim(0, YMAX)
 
-    for name, point in GAMES:
-        if x[0] <= point <= x[-1]:
-            ax.axvline(x=point, color=FRAME_COLOR, linestyle=":")
-            ax.annotate(name, xy=(point, YMAX), xytext=(point, YMAX * 0.9), verticalalignment="top",
-                        color=FONT_COLOR, arrowprops=dict(facecolor=FRAME_COLOR, shrink=0.05))
+    for game in GAMES:
+        if x[0] <= game.startat <= x[-1]:
+            ax.axvline(x=game.startat, color=FRAME_COLOR, linestyle=":")
+            ax.annotate(game.name, xy=(game.startat, YMAX), xytext=(game.startat, YMAX * 0.9), verticalalignment="top",
+                        color=FONT_COLOR, arrowprops=dict(facecolor=FRAME_COLOR, shrink=0.05), ha=game.align)
 
     for e, style, color in RTA_EMOTES:
-        _y = tuple(c[e] / WINDOWSIZE for c in y)
+        _y = np.fromiter((c[e] for c in y), int)
         if not sum(_y):
             continue
+        _y = moving_average(_y) * AVR_WINDOW
         ax.plot(x, _y, label=e, linestyle=style, color=(color if color else None))
 
     if add_legend:
-        leg = ax.legend(facecolor="None", frameon=False, bbox_to_anchor=(1.015, 1), loc="upper left")
+        leg = ax.legend(facecolor="None", frameon=False, bbox_to_anchor=(1.01, 1), loc="upper left")
         for text in leg.get_texts():
             text.set_color(FONT_COLOR)
 
